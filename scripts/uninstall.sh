@@ -95,6 +95,16 @@ else
     skip "Xorg DPMS override"
 fi
 
+# ── Remove NVIDIA D3cold udev rule ────────────────────────────────────────
+
+if [ -f /etc/udev/rules.d/80-nvidia-pm.rules ]; then
+    rm -f /etc/udev/rules.d/80-nvidia-pm.rules
+    ok "Removed NVIDIA D3cold udev rule"
+    echo -e "${YELLOW}  Warning: GPU may enter deep sleep again, which can cause freezes.${NC}"
+else
+    skip "NVIDIA D3cold udev rule"
+fi
+
 # ── Note: NOT unmasking systemd targets ─────────────────────────────────────
 
 echo

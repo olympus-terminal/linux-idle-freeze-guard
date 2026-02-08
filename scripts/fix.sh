@@ -97,6 +97,53 @@ info "Detected desktop: $desktop"
 
 changes_made=0
 
+# ── 0. NVIDIA GPU D3cold (ROOT CAUSE FIX) ─────────────────────────────────
+
+echo
+echo -e "${BOLD}--- NVIDIA GPU D3cold Power State (Primary Fix) ---${NC}"
+
+if lspci 2>/dev/null | grep -qi nvidia; then
+    udev_rule="/etc/udev/rules.d/80-nvidia-pm.rules"
+    expected_d3cold='ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{d3cold_allowed}="0"'
+    expected_power='ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{power/control}="on"'
+
+    if [ -f "$udev_rule" ] && grep -q 'd3cold_allowed' "$udev_rule" && grep -q 'power/control' "$udev_rule"; then
+        already "NVIDIA D3cold disabled via udev rule"
+    else
+        cat > "$udev_rule" << 'UDEV'
+# Linux Idle Freeze Guard - Disable NVIDIA GPU deep sleep (D3cold)
+# This is the primary fix: prevents the GPU from entering a power state
+# it cannot recover from, which is the root cause of display freezes.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{d3cold_allowed}="0"
+UDEV
+
+        ok "Created udev rule to disable NVIDIA D3cold: $udev_rule"
+        changes_made=$((changes_made + 1))
+    fi
+
+    # Apply immediately to current session (without reboot)
+    for dev in /sys/bus/pci/devices/*; do
+        if [ -f "$dev/vendor" ] && [ "$(cat "$dev/vendor" 2>/dev/null)" = "0x10de" ]; then
+            if [ -f "$dev/d3cold_allowed" ]; then
+                current=$(cat "$dev/d3cold_allowed" 2>/dev/null || echo "unknown")
+                if [ "$current" = "1" ]; then
+                    echo 0 > "$dev/d3cold_allowed" 2>/dev/null && \
+                        ok "Disabled D3cold on $(basename "$dev") (live)" || \
+                        skip "Could not disable D3cold on $(basename "$dev") live (will apply after reboot)"
+                else
+                    already "D3cold already disabled on $(basename "$dev")"
+                fi
+            fi
+            if [ -f "$dev/power/control" ]; then
+                echo "on" > "$dev/power/control" 2>/dev/null || true
+            fi
+        fi
+    done
+else
+    skip "No NVIDIA GPU detected, skipping D3cold fix"
+fi
+
 # ── 1. Systemd Targets ──────────────────────────────────────────────────────
 
 echo
