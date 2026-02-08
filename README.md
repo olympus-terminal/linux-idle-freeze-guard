@@ -1,10 +1,14 @@
 # Linux Idle Freeze Guard
 
-**Your Linux machine freezes when you leave it alone? The NVIDIA GPU is entering a power state it can't wake up from.**
+**You leave your Linux machine idle, walk away, and come back to a completely frozen display. Mouse won't move. Keyboard does nothing. The only option is holding the power button.**
+
+This project exists because of that exact problem. It happens on Linux systems with NVIDIA GPUs — particularly laptops with hybrid graphics — and it's caused by the GPU failing to wake up after the system goes idle.
 
 ## The Root Cause: D3cold
 
-After extensive troubleshooting, we found the actual root cause: the NVIDIA GPU enters **D3cold** (deep sleep), a PCI power state from which the proprietary NVIDIA driver cannot reliably recover. When the GPU fails to wake, the display server hangs waiting for it, and your entire graphical session freezes.
+When your system sits idle, Linux power management transitions the NVIDIA GPU into **D3cold** — the deepest PCI power state, where the chip is completely powered off. The problem is that the proprietary NVIDIA driver cannot reliably bring the GPU back from D3cold. When something tries to wake the display, the driver fails, the display server hangs waiting for a GPU that won't respond, and your entire graphical session is frozen.
+
+Notably, this **never happens while the GPU is busy** (e.g. during a long-running compute job). It only happens when the machine goes idle and the GPU has nothing to do.
 
 The fix is a single udev rule that prevents the GPU from entering D3cold:
 
