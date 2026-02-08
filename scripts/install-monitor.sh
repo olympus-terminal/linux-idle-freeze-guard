@@ -138,6 +138,30 @@ LOGIND
     FIXES_APPLIED=$((FIXES_APPLIED + 1))
 fi
 
+# ── Check NVIDIA D3cold udev rule ──────────────────────────────────────────
+
+if lspci 2>/dev/null | grep -qi nvidia; then
+    if [ ! -f /etc/udev/rules.d/80-nvidia-pm.rules ] || ! grep -q 'd3cold_allowed' /etc/udev/rules.d/80-nvidia-pm.rules 2>/dev/null; then
+        log_warn "NVIDIA D3cold udev rule is missing! Re-creating (this is the primary fix)."
+
+        cat > /etc/udev/rules.d/80-nvidia-pm.rules << 'UDEV'
+# Linux Idle Freeze Guard - Disable NVIDIA GPU deep sleep (D3cold)
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{d3cold_allowed}="0"
+UDEV
+
+        # Apply immediately
+        for dev in /sys/bus/pci/devices/*; do
+            if [ -f "$dev/vendor" ] && [ "$(cat "$dev/vendor" 2>/dev/null)" = "0x10de" ]; then
+                [ -f "$dev/d3cold_allowed" ] && echo 0 > "$dev/d3cold_allowed" 2>/dev/null || true
+                [ -f "$dev/power/control" ] && echo "on" > "$dev/power/control" 2>/dev/null || true
+            fi
+        done
+
+        FIXES_APPLIED=$((FIXES_APPLIED + 1))
+    fi
+fi
+
 # ── Check Xorg DPMS override ────────────────────────────────────────────────
 
 if [ -d /etc/X11/xorg.conf.d ] && [ ! -f /etc/X11/xorg.conf.d/10-freeze-guard-dpms.conf ]; then

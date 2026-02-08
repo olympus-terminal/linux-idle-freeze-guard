@@ -77,6 +77,53 @@ else
     fi
 fi
 
+# ── NVIDIA D3cold Status ──────────────────────────────────────────────────────
+
+header "NVIDIA GPU D3cold (Root Cause)"
+
+if lspci 2>/dev/null | grep -qi nvidia; then
+    d3cold_found=false
+    for dev in /sys/bus/pci/devices/*; do
+        if [ -f "$dev/vendor" ] && [ "$(cat "$dev/vendor" 2>/dev/null)" = "0x10de" ]; then
+            class=$(cat "$dev/class" 2>/dev/null || echo "")
+            # Check VGA (0x030000) and 3D controller (0x030200) classes
+            if [[ "$class" == 0x0300* ]] || [[ "$class" == 0x0302* ]]; then
+                devname=$(basename "$dev")
+                if [ -f "$dev/d3cold_allowed" ]; then
+                    d3cold_val=$(cat "$dev/d3cold_allowed" 2>/dev/null || echo "unknown")
+                    d3cold_found=true
+                    if [ "$d3cold_val" = "0" ]; then
+                        ok "D3cold disabled on $devname — GPU cannot enter deep sleep"
+                    else
+                        risk "D3cold ENABLED on $devname — GPU CAN enter deep sleep (THIS IS THE ROOT CAUSE)"
+                    fi
+                fi
+                if [ -f "$dev/power/control" ]; then
+                    pwr=$(cat "$dev/power/control" 2>/dev/null || echo "unknown")
+                    if [ "$pwr" = "on" ]; then
+                        ok "Power control on $devname: on (GPU stays powered)"
+                    else
+                        warn "Power control on $devname: $pwr (GPU may power down)"
+                    fi
+                fi
+            fi
+        fi
+    done
+
+    # Check for udev rule
+    if [ -f /etc/udev/rules.d/80-nvidia-pm.rules ] && grep -q 'd3cold_allowed' /etc/udev/rules.d/80-nvidia-pm.rules 2>/dev/null; then
+        ok "Udev rule in place: /etc/udev/rules.d/80-nvidia-pm.rules (survives reboots)"
+    else
+        risk "No udev rule to disable D3cold — current setting will be lost on reboot"
+    fi
+
+    if ! $d3cold_found; then
+        info "Could not find D3cold sysfs entries for NVIDIA GPU"
+    fi
+else
+    ok "No NVIDIA GPU detected — D3cold is not relevant"
+fi
+
 # ── NVIDIA Driver ─────────────────────────────────────────────────────────────
 
 header "NVIDIA Driver"
