@@ -30,18 +30,23 @@ echo
 # ── What happened ────────────────────────────────────────────────────────────
 
 echo -e "${BOLD}What happened:${NC}"
-echo "  Your display manager or compositor froze after the system"
-echo "  tried to suspend or blank the screen. The NVIDIA GPU driver"
-echo "  failed to wake the display back up."
+echo "  One of two things:"
+echo "  1. Your display froze after suspend — the NVIDIA GPU failed to wake up"
+echo "  2. Your display is fine but keyboard/mouse are dead — systemd-logind"
+echo "     failed to restore input device access after suspend/resume"
 echo
 echo -e "${BOLD}Good news:${NC}"
-echo "  Your system is still running. Only the display is frozen."
-echo "  Background processes, tmux/screen sessions, and services"
-echo "  are all fine."
+echo "  Your system is still running. Background processes, tmux/screen"
+echo "  sessions, and services are all fine."
 echo
 echo -e "${YELLOW}${BOLD}Warning:${NC}"
 echo "  Restarting the display manager will close all GUI applications."
 echo "  Any unsaved work in graphical apps will be lost."
+echo
+echo -e "${BLUE}${BOLD}Laptop with lid closed?${NC}"
+echo "  If you're using an external monitor with the lid closed, you're"
+echo "  seeing this on the laptop's built-in display after opening the lid."
+echo "  After recovery, close the lid and your external monitor will resume."
 echo
 
 # ── Detect display manager ───────────────────────────────────────────────────
