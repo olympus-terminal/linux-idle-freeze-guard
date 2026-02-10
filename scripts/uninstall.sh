@@ -71,9 +71,16 @@ done
 
 # ── Remove dconf overrides ──────────────────────────────────────────────────
 
-for f in /etc/dconf/db/local.d/00-freeze-guard /etc/dconf/db/local.d/00-no-suspend /etc/dconf/db/local.d/locks/freeze-guard; do
+for f in /etc/dconf/db/local.d/00-freeze-guard /etc/dconf/db/local.d/00-no-suspend /etc/dconf/db/local.d/locks/freeze-guard /etc/dconf/db/gdm.d/10-freeze-guard; do
     if [ -f "$f" ]; then rm -f "$f" && ok "Removed $f"; else skip "$f"; fi
 done
+
+# Remove freeze-guard patch from GDM greeter defaults
+GDM_DCONF="/etc/gdm3/greeter.dconf-defaults"
+if [ -f "$GDM_DCONF" ] && grep -q "linux-idle-freeze-guard" "$GDM_DCONF" 2>/dev/null; then
+    sed -i '/=== ADDED BY linux-idle-freeze-guard ===/,$ d' "$GDM_DCONF"
+    ok "Removed freeze-guard patch from GDM greeter.dconf-defaults"
+fi
 
 dconf update 2>/dev/null || true
 

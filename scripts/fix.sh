@@ -95,6 +95,19 @@ fi
 
 info "Detected desktop: $desktop"
 
+# ── Detect Display Manager ──────────────────────────────────────────────────
+
+dm="unknown"
+if systemctl is-active --quiet gdm3 2>/dev/null || systemctl is-active --quiet gdm 2>/dev/null; then
+    dm="gdm"
+elif systemctl is-active --quiet sddm 2>/dev/null; then
+    dm="sddm"
+elif systemctl is-active --quiet lightdm 2>/dev/null; then
+    dm="lightdm"
+fi
+
+info "Detected display manager: $dm"
+
 changes_made=0
 
 # ── 0. NVIDIA GPU D3cold (ROOT CAUSE FIX) ─────────────────────────────────
@@ -176,8 +189,14 @@ if [ -f "$logind_conf" ]; then
 
     cat > "$logind_drop" << 'LOGIND'
 # Linux Idle Freeze Guard
-# Prevent lid switch and idle actions from triggering suspend
+# Prevent ALL hardware events and idle actions from triggering suspend
 [Login]
+HandlePowerKey=ignore
+HandlePowerKeyLongPress=ignore
+HandleSuspendKey=ignore
+HandleSuspendKeyLongPress=ignore
+HandleHibernateKey=ignore
+HandleHibernateKeyLongPress=ignore
 HandleLidSwitch=ignore
 HandleLidSwitchExternalPower=ignore
 HandleLidSwitchDocked=ignore
@@ -186,10 +205,74 @@ IdleActionSec=0
 LOGIND
 
     ok "Created logind drop-in: $logind_drop"
+    info "  Includes HandleLidSwitchExternalPower=ignore (defaults to suspend if not set)"
     changes_made=$((changes_made + 1))
 fi
 
-# ── 3. GNOME / dconf System Override ─────────────────────────────────────────
+# ── 3. GDM Greeter Power Settings ────────────────────────────────────────────
+
+echo
+echo -e "${BOLD}--- GDM Greeter Power Settings ---${NC}"
+
+# GDM runs its own GNOME session with INDEPENDENT power settings.
+# By default, GDM suspends the system after 20 min idle at the login screen.
+# This is a very common source of "settings keep reverting" confusion.
+if [ "$dm" = "gdm" ] || systemctl is-active gdm3 &>/dev/null || systemctl is-active gdm &>/dev/null; then
+
+    # Method 1: dconf database override for gdm user
+    mkdir -p /etc/dconf/profile
+    cat > /etc/dconf/profile/gdm << 'GDMPROFILE'
+user-db:user
+system-db:gdm
+file-db:/usr/share/gdm/greeter-dconf-defaults
+GDMPROFILE
+
+    mkdir -p /etc/dconf/db/gdm.d
+    cat > /etc/dconf/db/gdm.d/10-freeze-guard << 'GDMDCONF'
+# Linux Idle Freeze Guard - Prevent GDM greeter from suspending
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-timeout=uint32 0
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-timeout=uint32 0
+sleep-inactive-battery-type='nothing'
+
+[org/gnome/desktop/screensaver]
+idle-activation-enabled=false
+lock-enabled=false
+
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+GDMDCONF
+
+    dconf update 2>/dev/null && \
+        ok "Created GDM greeter dconf override (login screen will not suspend)" || \
+        skip "dconf update failed for GDM"
+
+    # Method 2: Patch greeter.dconf-defaults if it exists
+    GDM_DCONF="/etc/gdm3/greeter.dconf-defaults"
+    if [ -f "$GDM_DCONF" ]; then
+        if ! grep -q "freeze-guard" "$GDM_DCONF" 2>/dev/null; then
+            cat >> "$GDM_DCONF" << 'GDMDEFAULTS'
+
+# === ADDED BY linux-idle-freeze-guard ===
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-timeout=0
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-timeout=0
+sleep-inactive-battery-type='nothing'
+GDMDEFAULTS
+            ok "Patched GDM greeter.dconf-defaults"
+        else
+            already "GDM greeter.dconf-defaults already patched"
+        fi
+    fi
+
+    changes_made=$((changes_made + 1))
+else
+    skip "GDM not detected, skipping greeter power settings"
+fi
+
+# ── 4. GNOME / dconf System Override ─────────────────────────────────────────
 
 echo
 echo -e "${BOLD}--- Desktop Environment Settings ---${NC}"
@@ -306,7 +389,7 @@ KDE
     changes_made=$((changes_made + 1))
 fi
 
-# ── 4. DPMS (Display Power Management) ──────────────────────────────────────
+# ── 5. DPMS (Display Power Management) ──────────────────────────────────────
 
 echo
 echo -e "${BOLD}--- DPMS (Display Power Management) ---${NC}"
@@ -335,7 +418,7 @@ XORG
     changes_made=$((changes_made + 1))
 fi
 
-# ── 5. NVIDIA Persistence ───────────────────────────────────────────────────
+# ── 6. NVIDIA Persistence ───────────────────────────────────────────────────
 
 echo
 echo -e "${BOLD}--- NVIDIA Settings ---${NC}"

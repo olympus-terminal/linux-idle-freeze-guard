@@ -2,7 +2,9 @@
 
 **You leave your Linux machine idle, walk away, and come back to a completely frozen display. Mouse won't move. Keyboard does nothing. The only option is holding the power button.**
 
-This project exists because of that exact problem. It happens on Linux systems with NVIDIA GPUs — particularly laptops with hybrid graphics — and it's caused by the GPU failing to wake up after the system goes idle.
+Or worse: the display looks fine — clock is ticking, animations still running — but keyboard and mouse input is completely dead. The system isn't frozen, it just stopped listening.
+
+This project exists because of those exact problems. They happen on Linux systems with NVIDIA GPUs — particularly laptops with hybrid graphics — and are caused by the GPU failing to wake up after idle, or by `systemd-logind` failing to restore input device access after a suspend/resume cycle.
 
 ## The Root Cause: D3cold
 
@@ -18,7 +20,20 @@ ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000"
 ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{d3cold_allowed}="0"
 ```
 
-This project wraps that fix with diagnostics, additional defensive layers, monitoring, and recovery tools.
+## The Other Root Cause: Input Loss After Suspend
+
+There is a second, subtler failure mode. The system suspends (even briefly via s2idle), and when it wakes, the display comes back fine — the GPU recovers — but **keyboard and mouse input is dead**. The display keeps rendering, apps keep running, voice-to-text still works, but hardware input devices are gone.
+
+This happens because `systemd-logind` manages input device file descriptors for the X session. During suspend, logind pauses all input devices. On resume, it's supposed to hand them back. With the NVIDIA proprietary driver on X11, this handoff sometimes fails silently. The kernel sees the USB devices as connected, but the X server never gets the file descriptors back.
+
+This is especially common on **laptops running with the lid closed and an external monitor**, because:
+- `HandleLidSwitchExternalPower` defaults to `suspend` — closing the lid triggers suspend even on AC power
+- The GDM greeter has its **own** power settings that can independently suspend the system after idle
+- When `systemd-logind` is restarted (e.g. by a script), it revokes all input device access from the running X session
+
+The fix is to disable all suspend triggers at every layer, including the often-overlooked GDM greeter settings and the `HandleLidSwitchExternalPower` logind option.
+
+This project wraps both fixes with diagnostics, additional defensive layers, monitoring, and recovery tools.
 
 ## Quick Start
 
@@ -48,7 +63,7 @@ sudo ./scripts/install-monitor.sh
 
 ## How the Fix Works
 
-The fix operates at multiple layers. **Layer 0 is the one that actually solves the problem.** Layers 1-5 are defense-in-depth to prevent the system from even attempting to trigger the GPU power transition.
+The fix operates at multiple layers. **Layer 0 is the one that actually solves the display freeze.** Layers 1-6 are defense-in-depth to prevent the system from even attempting to trigger the GPU power transition or suspend cycle that causes input loss.
 
 ### Layer 0: D3cold (the actual fix)
 
@@ -65,10 +80,21 @@ Masks `sleep.target`, `suspend.target`, `hibernate.target`, and `hybrid-sleep.ta
 ### Layer 2: Logind Configuration
 
 Drop-in config at `/etc/systemd/logind.conf.d/freeze-guard.conf`:
-- `HandleLidSwitch=ignore` (and variants)
+- `HandleLidSwitch=ignore` (and all variants including `HandleLidSwitchExternalPower` and `HandleLidSwitchDocked`)
+- `HandleSuspendKey=ignore` (and all power/hibernate key variants)
 - `IdleAction=ignore`
 
-### Layer 3: Desktop Environment (GNOME/KDE)
+**Important:** `HandleLidSwitchExternalPower` defaults to `suspend` even when `HandleLidSwitch` is set to `ignore`. This catches laptops running with the lid closed on AC power with an external monitor.
+
+### Layer 3: GDM Greeter Power Settings
+
+GDM runs its own GNOME session on the login screen with **independent power settings**. By default, GDM will suspend the system after 20 minutes of idle at the login screen. This is a common source of "the settings keep reverting" reports — GDM's settings are separate from the user's.
+
+Fixed via:
+- `/etc/dconf/db/gdm.d/` system override with sleep disabled
+- Direct dconf database update for the gdm user
+
+### Layer 4: Desktop Environment (GNOME/KDE)
 
 System-level dconf overrides with **locks** so package updates and GUI settings cannot re-enable sleep:
 - Sleep on AC/battery: disabled
@@ -76,11 +102,11 @@ System-level dconf overrides with **locks** so package updates and GUI settings 
 - Screensaver: disabled
 - Lid close action: nothing
 
-### Layer 4: DPMS (Display Power Management)
+### Layer 5: DPMS (Display Power Management)
 
 Xorg config to disable DPMS entirely — prevents the display from being powered off by X11.
 
-### Layer 5: NVIDIA Persistence
+### Layer 6: NVIDIA Persistence
 
 Enables `nvidia-persistenced` to keep the GPU initialized even when no display client is active.
 
@@ -117,6 +143,28 @@ Or use the recovery script:
 ```
 
 **Note:** GUI app unsaved work is lost, but terminal sessions, tmux/screen, background processes, and SSH connections survive.
+
+### Laptop with lid closed (external monitor only)
+
+If you run your laptop with the lid closed and an external monitor, `Ctrl+Alt+F4` switches to a TTY on the **laptop's built-in display**, which you can't see. To recover:
+
+1. **Open the laptop lid** to see the TTY on the built-in screen
+2. Log in and run: `sudo systemctl restart gdm`
+3. Close the lid again once the desktop is back on the external monitor
+
+Alternative if you have SSH access from another device:
+```bash
+ssh user@your-machine
+sudo systemctl restart gdm
+```
+
+### Input-only freeze (Type 3)
+
+If the display is still updating (e.g. clock changes, animations play) but keyboard and mouse do nothing:
+
+1. **Voice-to-text still works** — if you have a speech input app focused on a terminal, you can type commands through it
+2. `Ctrl+Alt+F4` may still work because VT switching is handled by the kernel, not X
+3. If on a laptop with lid closed, open the lid to access the TTY
 
 ## Supported Distributions
 

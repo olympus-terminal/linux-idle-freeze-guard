@@ -127,6 +127,12 @@ if [ ! -f /etc/systemd/logind.conf.d/freeze-guard.conf ]; then
     mkdir -p /etc/systemd/logind.conf.d
     cat > /etc/systemd/logind.conf.d/freeze-guard.conf << 'LOGIND'
 [Login]
+HandlePowerKey=ignore
+HandlePowerKeyLongPress=ignore
+HandleSuspendKey=ignore
+HandleSuspendKeyLongPress=ignore
+HandleHibernateKey=ignore
+HandleHibernateKeyLongPress=ignore
 HandleLidSwitch=ignore
 HandleLidSwitchExternalPower=ignore
 HandleLidSwitchDocked=ignore
@@ -134,8 +140,36 @@ IdleAction=ignore
 IdleActionSec=0
 LOGIND
 
-    systemctl restart systemd-logind 2>/dev/null || true
+    # NOTE: NOT restarting logind here -- that would revoke input devices from X
+    log_warn "logind drop-in recreated (will take effect on next boot or logind reload)"
     FIXES_APPLIED=$((FIXES_APPLIED + 1))
+fi
+
+# ── Check GDM greeter override ───────────────────────────────────────────
+
+if systemctl is-active gdm3 &>/dev/null || systemctl is-active gdm &>/dev/null; then
+    if [ ! -f /etc/dconf/db/gdm.d/10-freeze-guard ]; then
+        log_warn "GDM greeter power override is missing! Re-creating."
+
+        mkdir -p /etc/dconf/db/gdm.d
+        cat > /etc/dconf/db/gdm.d/10-freeze-guard << 'GDMDCONF'
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-timeout=uint32 0
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-timeout=uint32 0
+sleep-inactive-battery-type='nothing'
+
+[org/gnome/desktop/screensaver]
+idle-activation-enabled=false
+lock-enabled=false
+
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+GDMDCONF
+
+        dconf update 2>/dev/null
+        FIXES_APPLIED=$((FIXES_APPLIED + 1))
+    fi
 fi
 
 # ── Check NVIDIA D3cold udev rule ──────────────────────────────────────────

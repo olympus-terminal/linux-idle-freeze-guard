@@ -330,6 +330,32 @@ else
     risk "logind HandleLidSwitch: $lid_switch"
 fi
 
+# Check HandleLidSwitchExternalPower (often overlooked — defaults to suspend)
+lid_switch_ext="not set"
+if [ -f /etc/systemd/logind.conf.d/freeze-guard.conf ]; then
+    lid_switch_ext=$(grep -E "^HandleLidSwitchExternalPower=" /etc/systemd/logind.conf.d/freeze-guard.conf 2>/dev/null | cut -d= -f2 || echo "not set")
+fi
+if [ "$lid_switch_ext" = "not set" ] && [ -f /etc/systemd/logind.conf ]; then
+    lid_switch_ext=$(grep -E "^HandleLidSwitchExternalPower=" /etc/systemd/logind.conf 2>/dev/null | cut -d= -f2 || echo "not set")
+fi
+
+if [ "$lid_switch_ext" = "ignore" ]; then
+    ok "logind HandleLidSwitchExternalPower: ignore"
+elif [ "$lid_switch_ext" = "not set" ]; then
+    risk "logind HandleLidSwitchExternalPower: not set (DEFAULTS TO SUSPEND — laptop with external monitor will suspend on lid close)"
+else
+    risk "logind HandleLidSwitchExternalPower: $lid_switch_ext"
+fi
+
+# Check GDM greeter power settings (independent from user session)
+echo
+if [ -f /etc/dconf/db/gdm.d/10-no-sleep ] || [ -f /etc/dconf/db/gdm.d/10-freeze-guard ]; then
+    ok "GDM greeter power settings overridden (login screen won't suspend)"
+else
+    risk "GDM greeter has DEFAULT power settings — login screen will suspend after 20 min idle"
+    info "  This is independent from your user settings and a common source of unexpected suspends"
+fi
+
 # ── Journal Analysis ─────────────────────────────────────────────────────────
 
 header "Recent Freeze Evidence (Journal Analysis)"
@@ -357,6 +383,20 @@ gnome_crashes=$(journalctl --no-pager -b -1 --grep="gnome-shell.*(crash|SIGSEGV|
 gnome_crashes=${gnome_crashes:-0}
 if [ "$gnome_crashes" -gt 0 ] 2>/dev/null; then
     risk "Found $gnome_crashes GNOME Shell crash(es) in previous boot"
+fi
+
+# Look for input device removal (Type 3 freeze evidence)
+input_removals=$(journalctl --no-pager -b -1 --grep="device removed" 2>/dev/null | grep -c "keyboard\|Mouse\|Touchpad\|Keyboard" || true)
+input_removals=${input_removals:-0}
+if [ "$input_removals" -gt 5 ] 2>/dev/null; then
+    risk "Found $input_removals input device removal(s) in previous boot — likely Type 3 freeze (input loss after suspend)"
+fi
+
+# Look for logind restart (causes input loss)
+logind_restarts=$(journalctl --no-pager -b -1 --grep="Stopping.*systemd-logind\|Starting.*systemd-logind" 2>/dev/null | wc -l || true)
+logind_restarts=${logind_restarts:-0}
+if [ "$logind_restarts" -gt 2 ] 2>/dev/null; then
+    risk "systemd-logind was restarted during previous boot — this revokes input device access from X"
 fi
 
 # Look for lid events near reboots
@@ -397,6 +437,14 @@ echo    "    → The X server or GPU driver is completely locked up"
 echo    "    → Deeper failure, usually from suspend/resume"
 echo    "    → Recovery: Ctrl+Alt+F4 (may or may not work), then: sudo systemctl restart gdm"
 echo    "    → If TTY doesn't work: SSH in from another machine, or hold power button"
+echo
+echo -e "  ${BOLD}Type 3: Display still updating, but keyboard and mouse are dead${NC}"
+echo    "    → systemd-logind failed to restore input device access after suspend/resume"
+echo    "    → The GPU recovered fine, but input file descriptors were not handed back to X"
+echo    "    → Voice-to-text and other software input methods still work"
+echo    "    → Recovery: Ctrl+Alt+F4 (usually works — VT switch is kernel-level)"
+echo    "    → If laptop lid is closed: open lid to see TTY on built-in display"
+echo    "    → Then: sudo systemctl restart gdm"
 echo
 
 # ── Summary ──────────────────────────────────────────────────────────────────
